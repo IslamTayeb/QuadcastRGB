@@ -68,9 +68,9 @@ static const int rainbow[RAINBOW_CNT] = {
 };
 
 /* Functions */
-struct colschemes *parse_arg(int argc, const char **argv, int *verbose)
+void parse_arg(struct colschemes *cs, int argc, const char **argv,
+                                                                  int *verbose)
 {
-    struct colschemes *cs = malloc(sizeof(*cs));
     const char **arg_p;
     int cs_state = all;
 
@@ -85,10 +85,8 @@ struct colschemes *parse_arg(int argc, const char **argv, int *verbose)
 
     if(!(cs->upper.mode)) { /* any chosen group sets also the other */
         fprintf(stderr, NOMODE_MSG);
-        free(cs); exit(argerr);
+        exit(argerr);
     }
-
-    return cs;
 }
 
 int strequ(const char *str1, const char *str2)
@@ -102,10 +100,10 @@ static void set_arg(const char ***arg_pp, const char **argv_end,
 {
     if(strequ(**arg_pp, "--version")) {
         puts(VERSION_MESSAGE);
-        free(cs); exit(success);
+        exit(success);
     } else if(strequ(**arg_pp, "-h") || strequ(**arg_pp, "--help")) {
         puts(HELP_MESSAGE);
-        free(cs); exit(success);
+        exit(success);
     } else if(strequ(**arg_pp, "-v") || strequ(**arg_pp, "--verbose")) {
         *verbose = 1;
     } else if(strequ(**arg_pp, "-a") || strequ(**arg_pp, "--all")) {
@@ -123,7 +121,7 @@ static void set_arg(const char ***arg_pp, const char **argv_end,
         set_colors(arg_pp, argv_end, *state, cs);
     } else {
         fprintf(stderr, BADARG_MSG, **arg_pp);
-        free(cs); exit(argerr);
+        exit(argerr);
     }
 }
 
@@ -143,12 +141,12 @@ static void set_br_spd_dly(const char **arg_p, const char **argv_end,
     short num;
     if(no_opt_param(arg_p, argv_end)) {
         fprintf(stderr, NOPARAM_SHORT_MSG, *arg_p);
-        free(cs); exit(argerr);
+        exit(argerr);
     }
     num = atoi(*(arg_p+1));
     if(num > MAX_BR_SPD_DLY) {
         fprintf(stderr, BS_BADPARAM_MSG, *arg_p);
-        free(cs); exit(argerr);
+        exit(argerr);
     }
     if(strequ(*arg_p, "-b")) {        /* brightness */
         write_int_param(&(cs->upper.br), &(cs->lower.br), num, state);

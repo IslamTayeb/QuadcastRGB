@@ -32,6 +32,7 @@
 #include "devio.h"
 
 /* Constants */
+#define DISPLAY_MODE_SLEEP_TIME 55*1000 /* microsec */
 
 #define DEV_EPOUT 0x00 /* control endpoint OUT */
 #define DEV_EPIN 0x80 /* control endpoint IN */
@@ -108,7 +109,7 @@ const unsigned short product_ids_hp[] = {
     0x048c,
     0x068c,
     0x098c,         /* Duocast */
-    QUADCAST_2S_ID  /* Quadcast 2S id is also needed for rgbmodes */
+    QUADCAST_2S_PID  /* Quadcast 2S id is also needed for rgbmodes */
 };
 
 /* Microphone opening */
@@ -122,6 +123,8 @@ static short send_display_command(byte_t *packet,
                                   libusb_device_handle *handle);
 static void display_data_arr(libusb_device_handle *handle,
                              const byte_t *colcommand, const byte_t *end);
+static void qs2s_display_data_arr(libusb_device_handle *handle,
+                                          const byte_t *data_arr, int pck_cnt);
 #if !defined(DEBUG) && !defined(OS_MAC)
 static void daemonize(int verbose);
 #endif
@@ -239,22 +242,30 @@ static void get_dev_vid_pid(libusb_device *dev, unsigned short *vid,
 }
 
 void send_packets(libusb_device_handle *handle, const datpack *data_arr,
-                  int pck_cnt, int verbose)
+                  int pck_cnt, int verbose, int pid)
 {
-    short command_cnt;
     #ifdef DEBUG
     puts("Entering display mode...");
     #endif
     #if !defined(DEBUG) && !defined(OS_MAC)
     daemonize(verbose);
     #endif
-    command_cnt = count_color_commands(data_arr, pck_cnt, 0);
+
     signal(SIGINT, nonstop_reset_handler);
     signal(SIGTERM, nonstop_reset_handler);
+
     /* The loop works until a signal handler resets the variable */
     nonstop = 1; /* set to 1 only here */
-    while(nonstop)
-        display_data_arr(handle, *data_arr, *data_arr+2*BYTE_STEP*command_cnt);
+    if(pid == QUADCAST_2S_PID) {
+        while(nonstop)
+            qs2s_display_data_arr(handle, *data_arr, pck_cnt);
+    } else {
+        short command_cnt;
+        command_cnt = count_color_commands(data_arr, pck_cnt, 0);
+        while(nonstop)
+            display_data_arr(handle, *data_arr,
+                                            *data_arr+2*BYTE_STEP*command_cnt);
+    }
 }
 
 #if !defined(DEBUG) && !defined(OS_MAC)
@@ -308,7 +319,41 @@ static void display_data_arr(libusb_device_handle *handle,
         print_packet(packet, "Data:");
         #endif
         colcommand += 2*BYTE_STEP;
-        usleep(1000*55);
+        usleep(DISPLAY_MODE_SLEEP_TIME);
+    }
+    free(packet);
+}
+
+static void qs2s_display_data_arr(libusb_device_handle *handle,
+                                           const byte_t *data_arr, int pck_cnt)
+{
+    int pck = 0;
+    short sent;
+    byte_t *packet;
+    byte_t header_packet[PACKET_SIZE] = {
+        QS2S_DISPLAY_CODE, QS2S_PACKET_CNT_CODE, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+    };
+    header_packet[2] = pck_cnt;
+    #ifdef DEBUG
+    print_packet(header_packet, "QS2S header packet:");
+    #endif
+    sent = send_display_command(header_packet, handle);
+    if(sent != PACKET_SIZE)
+        nonstop = 0;
+
+    packet = calloc(PACKET_SIZE, 1);
+    for(; pck < pck_cnt && nonstop; pck++) {
+        memcpy(packet, data_arr + pck*DATA_PACKET_SIZE, DATA_PACKET_SIZE);
+        sent = libusb_control_transfer(handle, BMREQUEST_TYPE_OUT,
+                   BREQUEST_OUT, WVALUE, WINDEX, packet, PACKET_SIZE, TIMEOUT);
+        if(sent != PACKET_SIZE) {
+            nonstop = 0; break;
+        }
+        #ifdef DEBUG
+        print_packet(packet, "Data:");
+        #endif
+        usleep(DISPLAY_MODE_SLEEP_TIME);
     }
     free(packet);
 }

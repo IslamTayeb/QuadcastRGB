@@ -33,36 +33,44 @@
 
 
 
-static int count_data(struct colscheme *colsch);
+static void get_mode_sizes(struct colschemes *cs, int *seq_upper,
+                                                               int *seq_lower);
+static int count_data(struct colscheme *colsch, int pid);
+static int count_2s_data(const struct colscheme *colsch);
 static void fill_data(struct colscheme *colsch, byte_t *da, int pckcnt,
-                      int group);
+                                                                    int group);
+static void fill_qs2s_data(const struct colscheme *colsch, byte_t *da,
+                                                        int pckcnt, int group);
 static void equalize(int upper_size, int lower_size, datpack *da);
 static void fillup_to(size_t copy_size, byte_t *curr, byte_t *finish);
 static void set_brightness(int *color, int br);
 
 /* Solid */
 static void sequence_solid(const int *colors, byte_t *da);
+static void sequence_solid_qs2s(const int *colors, byte_t *da, int group);
+static void fill_qs2s_packets_with_color(byte_t *start, int clr, int offset,
+                                                                      int cnt);
 /* Blink */
 static unsigned int count_blink_data(struct colscheme *colsch);
 static void sequence_blink_random(int speed, int dly_seg, byte_t *da);
 static void sequence_blink(const struct colscheme *colsch, byte_t *da,
-                           int pckcnt);
+                                                                   int pckcnt);
 static void blink_segment_fill(int col, int col_seg, int dly_seg, byte_t **da);
 static void color_fill(int color, int size, byte_t **da);
 static int random_color();
 /* Cycle */
-static unsigned int count_cycle_data(struct colscheme *colsch);
+static unsigned int count_cycle_data(const struct colscheme *colsch);
 static int get_gradient_length(const int *color, int spd);
 static void sequence_cycle(const int *color, int spd, byte_t *da);
 static void write_gradient(byte_t **da, int start_col, int end_col,
-                           int length);
+                                                                   int length);
 /* Wave */
 static void sequence_wave(int *color, int spd, int group, byte_t *da);
 static void wave_array_shift(int *color);
 /* Lightning & Pulse */
 static unsigned int count_lightning_data(struct colscheme *colsch);
 static void sequence_lightning(const int *color, int spd, int group,
-                               int synchronous, byte_t *da);
+                                                  int synchronous, byte_t *da);
 static int next_gradient_color(int color, int endcolor, unsigned int size);
 
 /* Shared */
@@ -76,31 +84,44 @@ static void print_datpack(datpack *da, int pck_cnt);
 
 datpack *parse_colorscheme(struct colschemes *cs, int *pck_cnt)
 {
-    datpack *data_arr;
+    datpack *data_arr = NULL;
     int seq_upper, seq_lower;
 
-    seq_upper = count_data(&cs->upper);
-    seq_lower = count_data(&cs->lower);
-    if(seq_upper < 1 || seq_lower < 1) {
-        fputs(NOSUPPORT_MSG, stderr);
-        free(cs); exit(254);
-    } else if(cs->pid == QUADCAST_2S_ID) {
-        printf(QS_2S_NOSUPPORT_MSG, cs->upper.mode);
-        free(cs); exit(254);
-    }
+    set_brightness(cs->upper.colors, cs->upper.br);
+    set_brightness(cs->lower.colors, cs->lower.br);
 
+    get_mode_sizes(cs, &seq_upper, &seq_lower);
     *pck_cnt = seq_upper >= seq_lower ? seq_upper : seq_lower;
     data_arr = calloc(sizeof(datpack), *pck_cnt);
 
-    fill_data(&cs->upper, *data_arr, *pck_cnt, upper);
-    fill_data(&cs->lower, *data_arr+BYTE_STEP, *pck_cnt, lower);
-    equalize(seq_upper, seq_lower, data_arr);
+    if(cs->pid == QUADCAST_2S_PID) {
+        fill_qs2s_data(&cs->upper, *data_arr, *pck_cnt, upper);
+        fill_qs2s_data(&cs->lower, *data_arr, *pck_cnt, lower);
+    } else {
+        fill_data(&cs->upper, *data_arr, *pck_cnt, upper);
+        fill_data(&cs->lower, *data_arr+BYTE_STEP, *pck_cnt, lower);
+        equalize(seq_upper, seq_lower, data_arr);
+    }
 
     #ifdef DEBUG
     print_datpack(data_arr, *pck_cnt);
     #endif
 
     return data_arr;
+}
+
+static void get_mode_sizes(struct colschemes *cs, int *seq_upper,
+                                                                int *seq_lower)
+{
+    *seq_upper = count_data(&cs->upper, cs->pid);
+    *seq_lower = count_data(&cs->lower, cs->pid);
+    if(*seq_upper < 1 || *seq_lower < 1) {
+        if (cs->pid == QUADCAST_2S_PID)
+            printf(QS_2S_NOSUPPORT_MSG, cs->upper.mode);
+        else
+            puts(NOSUPPORT_MSG);
+        exit(254);
+    }
 }
 
 short count_color_commands(const datpack *data_arr, int pck_cnt, int colgroup)
@@ -119,8 +140,11 @@ short count_color_commands(const datpack *data_arr, int pck_cnt, int colgroup)
     return cnt;
 }
 
-static int count_data(struct colscheme *colsch)
+static int count_data(struct colscheme *colsch, int pid)
 {
+    if(pid == QUADCAST_2S_PID) /* the protocol is different for this one */
+        return count_2s_data(colsch);
+
     if(strequ(colsch->mode, "solid")) {
         return 1;
     } else if(strequ(colsch->mode, "blink")) {
@@ -130,9 +154,17 @@ static int count_data(struct colscheme *colsch)
     } else if(strequ(colsch->mode, "lightning") ||
               strequ(colsch->mode, "pulse")) {
         return count_lightning_data(colsch);
-    } else {
-        return -1;
     }
+    return -1;
+}
+
+static int count_2s_data(const struct colscheme *colsch)
+{
+    if(strequ(colsch->mode, "solid")) {
+        /* 6 packets for theoretical 140 LEDs where 108 are actually used */
+        return 6;
+    }
+    return -1;
 }
 
 static unsigned int count_blink_data(struct colscheme *colsch)
@@ -149,7 +181,7 @@ static unsigned int count_blink_data(struct colscheme *colsch)
     return DIV_CEIL(size, COLPAIR_PER_PCT);
 }
 
-static unsigned int count_cycle_data(struct colscheme *colsch)
+static unsigned int count_cycle_data(const struct colscheme *colsch)
 {
     unsigned int size;
     /* The size of one gradient: */
@@ -189,9 +221,8 @@ static unsigned int colarr_len(const int *arr)
 }
 
 static void fill_data(struct colscheme *colsch, byte_t *da, int pckcnt,
-                      int group)
+                                                                     int group)
 {
-    set_brightness(colsch->colors, colsch->br);
     if(strequ(colsch->mode, "solid")) {
         sequence_solid(colsch->colors, da);
     } else if(strequ(colsch->mode, "blink")) {
@@ -208,6 +239,21 @@ static void fill_data(struct colscheme *colsch, byte_t *da, int pckcnt,
     } else if(strequ(colsch->mode, "pulse")) {
         sequence_lightning(colsch->colors, colsch->spd, group, 1, da);
     }
+}
+
+static void fill_qs2s_data(const struct colscheme *colsch, byte_t *da,
+                                                         int pckcnt, int group)
+{
+    int pcknum = 0;
+
+    for(; pcknum < pckcnt; pcknum++) {
+        da[pcknum*DATA_PACKET_SIZE] = QS2S_DISPLAY_CODE;
+        da[pcknum*DATA_PACKET_SIZE+1] = QS2S_RGB_PACKET_CODE;
+        da[pcknum*DATA_PACKET_SIZE+2] = pcknum;
+    }
+
+    if(strequ(colsch->mode, "solid"))
+        sequence_solid_qs2s(colsch->colors, da, group);
 }
 
 static void set_brightness(int *color, int br) 
@@ -252,6 +298,29 @@ static void sequence_solid(const int *colors, byte_t *da)
 {
     *da = RGB_CODE; /* write code to the first byte */
     write_hexcolor(*colors, da+1); /* write RGB */
+}
+
+static void sequence_solid_qs2s(const int *colors, byte_t *da, int group)
+{
+    if(group == upper)
+        fill_qs2s_packets_with_color(da, colors[0], 0, QS2S_LED_CNT/2);
+    else if(group == lower)
+        fill_qs2s_packets_with_color(da+2*DATA_PACKET_SIZE, colors[0], 14,
+                                                               QS2S_LED_CNT/2);
+}
+
+static void fill_qs2s_packets_with_color(byte_t *start, int clr, int offset,
+                                                                       int cnt)
+{
+    int i = 0;
+    byte_t *p = start + 4 + 3*offset; /* skip the codes part by adding 4 */
+
+    write_hexcolor(clr, p);
+
+    for(; i <= cnt; i++) {
+        p = ((p+3 - start) % DATA_PACKET_SIZE == 0) ? p + 7 : p + 3 ;
+        memcpy(p, start + 4 + 3*offset, 3);
+    }
 }
 
 static void sequence_blink_random(int speed, int delay, byte_t *da)

@@ -84,7 +84,8 @@ struct colschemes {
 };
 
 /* Functions */
-struct colschemes *parse_arg(int argc, const char **argv, int *verbose);
+void parse_arg(struct colschemes *cs, int argc, const char **argv,
+                                                                 int *verbose);
 int strequ(const char *str1, const char *str2);
 
 #endif

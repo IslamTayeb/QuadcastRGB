@@ -38,7 +38,9 @@
 #define DATA_PACKET_SIZE 64
 #define BYTE_STEP 4 /* used to skip some part of bytes in a packet */
 #define RGB_CODE 0x81
-
+/* For Quadcast 2S */
+#define QS2S_RGB_PACKET_CODE 0x02
+#define QS2S_LED_CNT 108
 /* Macros */
 #define DIV_CEIL(X, Y) (((X)/(Y)) + ((X)%(Y) != 0))
 #define SPEED_RANGE(MIN, MAX, SPD) MIN + (MAX - MIN)*(100-SPD)/100
@@ -61,7 +63,7 @@
 #define MAX_LGHT_DOWN 131
 
 /* Messages */
-#define NOSUPPORT_MSG _("The mode is not supported yet.\n")
+#define NOSUPPORT_MSG _("The mode is not supported yet.")
 #define QS_2S_NOSUPPORT_MSG _("No support for %s on Quadcast 2S yet\n")
 
 /* Types */

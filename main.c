@@ -53,23 +53,22 @@
 
 int main(int argc, const char **argv)
 {
-    struct colschemes *cs;
+    struct colschemes cs;
     datpack *data_arr;
     libusb_device_handle *handle;
     int verbose = 0, data_packet_cnt;
     /* Parse arguments */
-    cs = parse_arg(argc, argv, &verbose);
+    parse_arg(&cs, argc, argv, &verbose);
     VERBOSE_PRINT(verbose, VERBOSE_ARG);
     /* Open the microphone */
     VERBOSE_PRINT(verbose, VERBOSE_MIC);
-    handle = open_mic(&cs->pid);
+    handle = open_mic(&cs.pid);
     /* Create data packets */
     VERBOSE_PRINT(verbose, VERBOSE_COL);
-    data_arr = parse_colorscheme(cs, &data_packet_cnt);
-    free(cs);
+    data_arr = parse_colorscheme(&cs, &data_packet_cnt);
     /* Send packets */
     VERBOSE_PRINT(verbose, VERBOSE_PKT);
-    send_packets(handle, data_arr, data_packet_cnt, verbose);
+    send_packets(handle, data_arr, data_packet_cnt, verbose, cs.pid);
     /* Free all memory */
     free(data_arr);
     LIBUSB_FREE_EVERYTHING();
