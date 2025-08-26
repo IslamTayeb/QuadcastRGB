@@ -1,3 +1,10 @@
 temp/
 
 deps.mk # auto created by Makefile
+
+# Build artifacts
+dev
+quadcastrgb
+*.o
+*.dSYM/
+*.dSYM

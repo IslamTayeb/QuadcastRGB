@@ -29,8 +29,9 @@ ifeq ($(OS),freebsd) # thus, gcc required on FreeBSD
 	CC = gcc # clang seems to be unable to find libusb & libintl
 endif
 ifeq ($(OS),macos) # pass this info to the source code to disable daemonization
-	CFLAGS_DEV += -D OS_MAC
-	CFLAGS_INS += -D OS_MAC
+	CFLAGS_DEV += -D OS_MAC -I/opt/homebrew/opt/libusb/include
+	CFLAGS_INS += -D OS_MAC -I/opt/homebrew/opt/libusb/include
+	LIBS += -L/opt/homebrew/opt/libusb/lib
 endif
 # END
 

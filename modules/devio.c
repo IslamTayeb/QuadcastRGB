@@ -21,7 +21,7 @@
  * <https://www.gnu.org/licenses/gpl-2.0.en.html>. For any questions
  * concerning the license, you can write to <licensing@fsf.org>.
  * Also, you may visit the Free Software Foundation at
- * 51 Franklin Street, Fifth Floor Boston, MA 02110 USA. 
+ * 51 Franklin Street, Fifth Floor Boston, MA 02110 USA.
  */
 #include <unistd.h> /* for usleep */
 #include <fcntl.h> /* for daemonization */
@@ -55,7 +55,7 @@
 #define WINDEX 0x0000
 /* Messages */
 #define DEVLIST_ERR_MSG _("Couldn't get the list of USB devices.\n")
-#define NODEV_ERR_MSG _("HyperX Quadcast S isn't connected.\n")
+#define NODEV_ERR_MSG _("HyperX Quadcast S/DuoCast isn't connected or accessible through USB.\n")
 #define OPEN_ERR_MSG _("Couldn't open the microphone.\n")
 #define BUSY_ERR_MSG _("Another program is using the microphone already. " \
                        "Stopping.\n")
@@ -144,16 +144,76 @@ libusb_device_handle *open_micro(datpack *data_arr)
     libusb_device_handle *handle;
     ssize_t dev_count;
     short errcode;
+    int retry_count;
+
     errcode = libusb_init(NULL);
     if(errcode) {
         perror("libusb_init");
         free(data_arr); exit(libusberr);
     }
-    dev_count = libusb_get_device_list(NULL, &devs);
-    HANDLE_ERR(dev_count < 0, DEVLIST_ERR_MSG);
-    micro_dev = dev_search(devs, dev_count);
+
+    /* Set libusb options for better USB hub compatibility */
+    #if LIBUSB_API_VERSION >= 0x01000106
+    libusb_set_option(NULL, LIBUSB_OPTION_WEAK_AUTHORITY);
+    #endif
+
+    /* Try multiple times with delays for USB hub enumeration */
+    for(retry_count = 0; retry_count < 3; retry_count++) {
+        if(retry_count > 0) {
+            #ifdef DEBUG
+            printf("Retry attempt %d after delay...\n", retry_count + 1);
+            #endif
+            usleep(500000); /* 500ms delay */
+        }
+
+        dev_count = libusb_get_device_list(NULL, &devs);
+        if(dev_count < 0) {
+            if(retry_count < 2) {
+                libusb_free_device_list(devs, 1);
+                continue;
+            }
+            fprintf(stderr, DEVLIST_ERR_MSG);
+            FREE_AND_EXIT();
+        }
+
+        #ifdef DEBUG
+        printf("Found %zd USB devices\n", dev_count);
+        #endif
+
+        micro_dev = dev_search(devs, dev_count);
+        if(micro_dev) {
+            #ifdef DEBUG
+            printf("Compatible device found!\n");
+            #endif
+            break;
+        }
+
+        libusb_free_device_list(devs, 1);
+    }
+
     HANDLE_ERR(!micro_dev, NODEV_ERR_MSG);
-    errcode = libusb_open(micro_dev, &handle);
+    /* Try opening device with retries for USB hub issues */
+    for(retry_count = 0; retry_count < 3; retry_count++) {
+        if(retry_count > 0) {
+            #ifdef DEBUG
+            printf("Retrying device open (attempt %d)...\n", retry_count + 1);
+            #endif
+            usleep(200000); /* 200ms delay */
+        }
+
+        errcode = libusb_open(micro_dev, &handle);
+        if(errcode == 0) {
+            #ifdef DEBUG
+            printf("Device opened successfully\n");
+            #endif
+            break;
+        }
+
+        #ifdef DEBUG
+        printf("Open failed: %s\n", libusb_strerror(errcode));
+        #endif
+    }
+
     if(errcode) {
         fprintf(stderr, "%s\n%s", libusb_strerror(errcode), OPEN_ERR_MSG);
         FREE_AND_EXIT();
@@ -169,9 +229,35 @@ libusb_device_handle *open_micro(datpack *data_arr)
 static int claim_dev_interface(libusb_device_handle *handle)
 {
     int errcode0, errcode1;
+    int retry;
+
     libusb_set_auto_detach_kernel_driver(handle, 1); /* might be unsupported */
-    errcode0 = libusb_claim_interface(handle, 0);
-    errcode1 = libusb_claim_interface(handle, 1);
+
+    /* Try to claim interfaces with retries for USB hub timing issues */
+    for(retry = 0; retry < 3; retry++) {
+        if(retry > 0) {
+            #ifdef DEBUG
+            printf("Retrying interface claim (attempt %d)...\n", retry + 1);
+            #endif
+            usleep(100000); /* 100ms delay */
+        }
+
+        errcode0 = libusb_claim_interface(handle, 0);
+        errcode1 = libusb_claim_interface(handle, 1);
+
+        if(errcode0 == 0 && errcode1 == 0) {
+            #ifdef DEBUG
+            printf("Successfully claimed both interfaces\n");
+            #endif
+            return 0;
+        }
+
+        /* Release any claimed interfaces before retry */
+        if(errcode0 == 0) libusb_release_interface(handle, 0);
+        if(errcode1 == 0) libusb_release_interface(handle, 1);
+    }
+
+    /* Final error handling */
     if(errcode0 == LIBUSB_ERROR_BUSY || errcode1 == LIBUSB_ERROR_BUSY) {
         fprintf(stderr, BUSY_ERR_MSG);
         return 1;
@@ -180,13 +266,26 @@ static int claim_dev_interface(libusb_device_handle *handle)
         fprintf(stderr, OPEN_ERR_MSG);
         return 1;
     }
-    return 0;
+
+    #ifdef DEBUG
+    printf("Interface claim failed: if0=%s, if1=%s\n",
+           libusb_strerror(errcode0), libusb_strerror(errcode1));
+    #endif
+
+    return 1;
 }
 
 static libusb_device *dev_search(libusb_device **devs, ssize_t cnt)
 {
     libusb_device **dev;
+    #ifdef DEBUG
+    printf("Searching through %zd devices...\n", cnt);
+    #endif
+
     for(dev = devs; dev < devs+cnt; dev++) {
+        /* Small delay between device checks for hub compatibility */
+        usleep(10000); /* 10ms */
+
         if(is_compatible_mic(*dev))
             return *dev;
     }
@@ -195,10 +294,21 @@ static libusb_device *dev_search(libusb_device **devs, ssize_t cnt)
 
 static int is_compatible_mic(libusb_device *dev)
 {
-    int i, arr_size;
+    int i, arr_size, ret;
     const unsigned short *product_id_arr;
     struct libusb_device_descriptor descr;
-    libusb_get_device_descriptor(dev, &descr);
+
+    ret = libusb_get_device_descriptor(dev, &descr);
+    if(ret < 0) {
+        #ifdef DEBUG
+        printf("Failed to get device descriptor: %s\n", libusb_strerror(ret));
+        #endif
+        return 0;
+    }
+
+    #ifdef DEBUG
+    printf("Checking device: Vendor=%04x Product=%04x\n", descr.idVendor, descr.idProduct);
+    #endif
 
     if (descr.idVendor == DEV_VID_KINGSTON) {
         product_id_arr = product_ids_kingston;
