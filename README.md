@@ -123,6 +123,128 @@ The modifications specifically address:
 
 The retry mechanisms give the USB subsystem time to properly enumerate and initialize devices through the hub.
 
+## Auto-Start on Login (10% Gray)
+
+To have the RGB lights automatically set to 10% gray when your Mac starts:
+
+### Method 1: LaunchDaemon (Recommended)
+
+This method runs the program as root automatically on system startup.
+
+1. **Install the program system-wide**:
+
+   ```bash
+   sudo cp ./quadcastrgb /usr/local/bin/
+   sudo chmod 755 /usr/local/bin/quadcastrgb
+   ```
+
+2. **Install the LaunchDaemon**:
+
+   ```bash
+   sudo cp com.islamtayeb.quadcastrgb.plist /Library/LaunchDaemons/
+   sudo chmod 644 /Library/LaunchDaemons/com.islamtayeb.quadcastrgb.plist
+   sudo chown root:wheel /Library/LaunchDaemons/com.islamtayeb.quadcastrgb.plist
+   ```
+
+3. **Load the daemon** (starts immediately and on every boot):
+
+   ```bash
+   sudo launchctl load -w /Library/LaunchDaemons/com.islamtayeb.quadcastrgb.plist
+   ```
+
+4. **Check if it's running**:
+
+   ```bash
+   sudo launchctl list | grep quadcastrgb
+   ps aux | grep quadcastrgb
+   ```
+
+5. **View logs if needed**:
+
+   ```bash
+   tail -f /var/log/quadcastrgb.log
+   tail -f /var/log/quadcastrgb.error.log
+   ```
+
+### Managing the Auto-Start
+
+```bash
+# Stop the service
+sudo launchctl unload /Library/LaunchDaemons/com.islamtayeb.quadcastrgb.plist
+
+# Start the service
+sudo launchctl load /Library/LaunchDaemons/com.islamtayeb.quadcastrgb.plist
+
+# Disable auto-start (but keep installed)
+sudo launchctl unload -w /Library/LaunchDaemons/com.islamtayeb.quadcastrgb.plist
+
+# Re-enable auto-start
+sudo launchctl load -w /Library/LaunchDaemons/com.islamtayeb.quadcastrgb.plist
+
+# Completely remove
+sudo launchctl unload -w /Library/LaunchDaemons/com.islamtayeb.quadcastrgb.plist
+sudo rm /Library/LaunchDaemons/com.islamtayeb.quadcastrgb.plist
+sudo rm /usr/local/bin/quadcastrgb
+```
+
+### Changing the Color
+
+To change from 10% gray (1A1A1A) to another color, edit the plist file:
+
+```bash
+sudo nano /Library/LaunchDaemons/com.islamtayeb.quadcastrgb.plist
+```
+
+Find the line with `1A1A1A` and change it to your desired color:
+
+- `1A1A1A` - 10% gray (current)
+- `404040` - 25% gray
+- `808080` - 50% gray
+- `FFFFFF` - White
+- `FF0000` - Red
+- `00FF00` - Green
+- `0000FF` - Blue
+- `000000` - Black (off)
+
+After editing, reload the daemon:
+
+```bash
+sudo launchctl unload /Library/LaunchDaemons/com.islamtayeb.quadcastrgb.plist
+sudo launchctl load /Library/LaunchDaemons/com.islamtayeb.quadcastrgb.plist
+```
+
+### About the Rainbow Effect
+
+You may notice a brief rainbow effect when:
+
+- Adjusting the microphone volume
+- Muting/unmuting the microphone
+- Turning the microphone on/off
+- Unplugging and reconnecting the USB
+
+This is normal behavior. The DuoCast briefly returns to its default rainbow state when the hardware state changes, but the RGB control program immediately reapplies your chosen solid color. The program continuously sends color commands to maintain your selected color.
+
+### Method 2: Login Script (Alternative)
+
+If you prefer not to install system-wide:
+
+1. Create a script (update the path to match your installation):
+
+   ```bash
+   cat > ~/quadcastrgb-startup.sh << 'EOF'
+   #!/bin/bash
+   cd /Users/islamtayeb/Documents/GitHub/QuadcastRGB  # Update this path
+   sudo ./quadcastrgb solid 1A1A1A  # 10% gray
+   EOF
+   chmod +x ~/quadcastrgb-startup.sh
+   ```
+
+2. Add to Login Items:
+   - System Settings → General → Login Items
+   - Click "+" and add your script
+
+Note: This method will prompt for your password on login.
+
 ## Original Project
 
 Based on [QuadcastRGB](https://gitlab.com/Ors1mer/QuadcastRGB) by Ors1mer.
