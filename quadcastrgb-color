@@ -1,0 +1,190 @@
+#!/bin/bash
+
+# QuadcastRGB Color Changer Utility
+# Usage: quadcastrgb-color [color]
+# Examples:
+#   quadcastrgb-color 000000  # Black (off)
+#   quadcastrgb-color FFFFFF  # White
+#   quadcastrgb-color FF0000  # Red
+#   quadcastrgb-color 00FF00  # Green
+#   quadcastrgb-color 0000FF  # Blue
+#   quadcastrgb-color 1A1A1A  # 10% gray (default)
+
+# Function to get preset color
+get_preset_color() {
+    case "$1" in
+        "black"|"off") echo "000000" ;;
+        "white") echo "FFFFFF" ;;
+        "red") echo "FF0000" ;;
+        "green") echo "00FF00" ;;
+        "blue") echo "0000FF" ;;
+        "yellow") echo "FFFF00" ;;
+        "cyan") echo "00FFFF" ;;
+        "magenta") echo "FF00FF" ;;
+        "orange") echo "FFA500" ;;
+        "purple") echo "800080" ;;
+        "pink") echo "FFC0CB" ;;
+        "gray") echo "808080" ;;
+        "darkgray") echo "404040" ;;
+        "lightgray") echo "C0C0C0" ;;
+        "dimgray") echo "1A1A1A" ;;
+        *) echo "" ;;
+    esac
+}
+
+# Function to show usage
+show_usage() {
+    echo "QuadcastRGB Color Changer"
+    echo ""
+    echo "Usage: $(basename $0) [color]"
+    echo ""
+    echo "Color can be:"
+    echo "  - 6-digit hex code (e.g., FF0000 for red)"
+    echo "  - Preset name: black, white, red, green, blue, yellow, cyan, magenta,"
+    echo "                 orange, purple, pink, gray, darkgray, lightgray, dimgray, off"
+    echo ""
+    echo "Examples:"
+    echo "  $(basename $0) FF0000      # Set to red"
+    echo "  $(basename $0) red         # Set to red (using preset)"
+    echo "  $(basename $0) 000000      # Turn off (black)"
+    echo "  $(basename $0) off         # Turn off (using preset)"
+    echo "  $(basename $0)             # Show current color"
+    echo ""
+    echo "Current color: $(get_current_color)"
+}
+
+# Function to get current color from plist
+get_current_color() {
+    if [ -f /Library/LaunchDaemons/com.islamtayeb.quadcastrgb.plist ]; then
+        # Extract the color from the plist
+        color=$(sudo grep -A1 "<string>solid</string>" /Library/LaunchDaemons/com.islamtayeb.quadcastrgb.plist | tail -1 | sed 's/.*<string>//' | sed 's/<\/string>.*//' | tr -d ' ')
+        echo "$color"
+    else
+        echo "Unknown (daemon not installed)"
+    fi
+}
+
+# Function to validate hex color
+is_valid_hex() {
+    local color=$1
+    if [[ $color =~ ^[0-9A-Fa-f]{6}$ ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Show usage if no arguments
+if [ $# -eq 0 ]; then
+    show_usage
+    exit 0
+fi
+
+# Get the color argument
+COLOR_ARG=$(echo "$1" | tr '[:upper:]' '[:lower:]')  # Convert to lowercase for preset matching
+
+# Check if it's a preset
+PRESET_COLOR=$(get_preset_color "$COLOR_ARG")
+if [ -n "$PRESET_COLOR" ]; then
+    COLOR="$PRESET_COLOR"
+    echo "Using preset '$COLOR_ARG' = #$COLOR"
+else
+    # Remove # if present and convert to uppercase
+    COLOR=$(echo "$1" | sed 's/^#//' | tr '[:lower:]' '[:upper:]')
+fi
+
+# Validate the color
+if ! is_valid_hex "$COLOR"; then
+    echo "Error: Invalid color code '$1'"
+    echo "Please use a 6-digit hex code (e.g., FF0000) or a preset name"
+    echo ""
+    show_usage
+    exit 1
+fi
+
+# Check if running as sudo (required for launchctl operations)
+if [ "$EUID" -ne 0 ] && [ -z "$SUDO_USER" ]; then
+    echo "This script requires sudo privileges to update the system daemon."
+    echo "Please run: sudo $(basename $0) $COLOR"
+    exit 1
+fi
+
+echo "Changing QuadcastRGB color to #$COLOR..."
+
+# Create temporary plist with new color
+TEMP_PLIST="/tmp/com.islamtayeb.quadcastrgb.plist"
+cat > "$TEMP_PLIST" << EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.islamtayeb.quadcastrgb</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/quadcastrgb</string>
+        <string>solid</string>
+        <string>$COLOR</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/quadcastrgb.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/quadcastrgb.error.log</string>
+</dict>
+</plist>
+EOF
+
+# Stop the current daemon
+echo "Stopping current daemon..."
+launchctl unload /Library/LaunchDaemons/com.islamtayeb.quadcastrgb.plist 2>/dev/null
+
+# Install the new plist
+echo "Installing new configuration..."
+cp "$TEMP_PLIST" /Library/LaunchDaemons/com.islamtayeb.quadcastrgb.plist
+chmod 644 /Library/LaunchDaemons/com.islamtayeb.quadcastrgb.plist
+chown root:wheel /Library/LaunchDaemons/com.islamtayeb.quadcastrgb.plist
+
+# Clean up temp file
+rm "$TEMP_PLIST"
+
+# Start the daemon with new color
+echo "Starting daemon with new color..."
+launchctl load -w /Library/LaunchDaemons/com.islamtayeb.quadcastrgb.plist
+
+# Give it a moment to start
+sleep 1
+
+# Check if running
+if launchctl list | grep -q com.islamtayeb.quadcastrgb; then
+    echo "✅ Success! QuadcastRGB is now set to color #$COLOR"
+
+    # Show color preview if possible
+    case "$COLOR" in
+        "000000") echo "   🔲 Black (off)" ;;
+        "FFFFFF") echo "   ⬜ White" ;;
+        "FF0000") echo "   🟥 Red" ;;
+        "00FF00") echo "   🟩 Green" ;;
+        "0000FF") echo "   🟦 Blue" ;;
+        "FFFF00") echo "   🟨 Yellow" ;;
+        "FF00FF") echo "   🟪 Magenta" ;;
+        "00FFFF") echo "   🟦 Cyan" ;;
+        "FFA500") echo "   🟧 Orange" ;;
+        "1A1A1A") echo "   ⬛ 10% Gray" ;;
+        *) echo "   🎨 Custom color" ;;
+    esac
+else
+    echo "❌ Failed to start daemon. Check logs:"
+    echo "   sudo tail /tmp/quadcastrgb.error.log"
+fi

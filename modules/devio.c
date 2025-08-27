@@ -118,7 +118,7 @@ static int is_compatible_mic(libusb_device *dev);
 /* Packet transfer */
 static short send_display_command(byte_t *packet,
                                   libusb_device_handle *handle);
-static void display_data_arr(libusb_device_handle *handle,
+static int display_data_arr(libusb_device_handle *handle,
                              const byte_t *colcommand, const byte_t *end);
 #if !defined(DEBUG) && !defined(OS_MAC)
 static void daemonize(int verbose);
@@ -333,10 +333,14 @@ static int is_compatible_mic(libusb_device *dev)
     return 0;
 }
 
+static libusb_device_handle *attempt_reconnect(void);
+
 void send_packets(libusb_device_handle *handle, const datpack *data_arr,
                   int pck_cnt, int verbose)
 {
     short command_cnt;
+    int reconnect_attempts = 0;
+    libusb_device_handle *current_handle = handle;
     #ifdef DEBUG
     puts("Entering display mode...");
     #endif
@@ -348,8 +352,49 @@ void send_packets(libusb_device_handle *handle, const datpack *data_arr,
     signal(SIGTERM, nonstop_reset_handler);
     /* The loop works until a signal handler resets the variable */
     nonstop = 1; /* set to 1 only here */
-    while(nonstop)
-        display_data_arr(handle, *data_arr, *data_arr+2*BYTE_STEP*command_cnt);
+    while(nonstop) {
+        int display_result = display_data_arr(current_handle, *data_arr, *data_arr+2*BYTE_STEP*command_cnt);
+        if(display_result != 0 && nonstop) {
+            /* USB error occurred, try to reconnect */
+            #ifdef DEBUG
+            puts("USB error detected, attempting to reconnect...");
+            #endif
+            if(current_handle) {
+                libusb_release_interface(current_handle, 0);
+                libusb_release_interface(current_handle, 1);
+                libusb_close(current_handle);
+                current_handle = NULL;
+            }
+
+            /* Wait before reconnecting */
+            usleep(1000000); /* 1 second delay */
+
+            /* Try to reconnect */
+            while(nonstop && current_handle == NULL) {
+                libusb_device_handle *new_handle = attempt_reconnect();
+                if(new_handle != NULL) {
+                    current_handle = new_handle;
+                    reconnect_attempts = 0;
+                    #ifdef DEBUG
+                    puts("Successfully reconnected to device!");
+                    #endif
+                } else {
+                    reconnect_attempts++;
+                    #ifdef DEBUG
+                    printf("Reconnection attempt %d failed, waiting...\n", reconnect_attempts);
+                    #endif
+                    usleep(2000000); /* 2 second delay between attempts */
+                }
+            }
+        }
+    }
+
+    /* Clean up when exiting */
+    if(current_handle) {
+        libusb_release_interface(current_handle, 0);
+        libusb_release_interface(current_handle, 1);
+        libusb_close(current_handle);
+    }
 }
 
 #if !defined(DEBUG) && !defined(OS_MAC)
@@ -378,7 +423,7 @@ static void daemonize(int verbose)
 }
 #endif
 
-static void display_data_arr(libusb_device_handle *handle,
+static int display_data_arr(libusb_device_handle *handle,
                              const byte_t *colcommand, const byte_t *end)
 {
     short sent;
@@ -391,21 +436,24 @@ static void display_data_arr(libusb_device_handle *handle,
     while(colcommand < end && nonstop) {
         sent = send_display_command(header_packet, handle);
         if(sent != PACKET_SIZE) {
-            nonstop = 0; break; /* finish program in case of any errors */
+            free(packet);
+            return -1; /* Return error instead of setting nonstop */
         }
         memcpy(packet, colcommand, 2*BYTE_STEP);
         sent = libusb_control_transfer(handle, BMREQUEST_TYPE_OUT,
                    BREQUEST_OUT, WVALUE, WINDEX, packet, PACKET_SIZE, TIMEOUT);
         if(sent != PACKET_SIZE) {
-            nonstop = 0; break;
+            free(packet);
+            return -1; /* Return error instead of setting nonstop */
         }
         #ifdef DEBUG
         print_packet(packet, "Data:");
         #endif
         colcommand += 2*BYTE_STEP;
-        usleep(1000*55);
+        usleep(1000*20);  /* Reduced from 55ms to 20ms for faster color updates */
     }
     free(packet);
+    return 0; /* Success */
 }
 
 static short send_display_command(byte_t *packet, libusb_device_handle *handle)
@@ -435,3 +483,47 @@ static void print_packet(byte_t *pck, char *str)
     puts("");
 }
 #endif
+
+static libusb_device_handle *attempt_reconnect(void)
+{
+    libusb_device_handle *handle = NULL;
+    libusb_device **devs;
+    libusb_device *micro_dev;
+    int cnt, errcode, retry;
+
+    /* Get device list */
+    cnt = libusb_get_device_list(NULL, &devs);
+    if(cnt < 0) {
+        #ifdef DEBUG
+        fprintf(stderr, "Failed to get device list: %s\n", libusb_strerror(cnt));
+        #endif
+        return NULL;
+    }
+
+    /* Search for the device */
+    micro_dev = dev_search(devs, cnt);
+    if(!micro_dev) {
+        libusb_free_device_list(devs, 1);
+        return NULL;
+    }
+
+    /* Try opening device */
+    for(retry = 0; retry < 3; retry++) {
+        errcode = libusb_open(micro_dev, &handle);
+        if(errcode == 0) {
+            /* Device opened, now try to claim interfaces */
+            errcode = claim_dev_interface(handle);
+            if(errcode == 0) {
+                /* Success! */
+                libusb_free_device_list(devs, 1);
+                return handle;
+            }
+            libusb_close(handle);
+            handle = NULL;
+        }
+        usleep(200000); /* 200ms delay */
+    }
+
+    libusb_free_device_list(devs, 1);
+    return NULL;
+}

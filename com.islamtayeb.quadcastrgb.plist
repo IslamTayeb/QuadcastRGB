@@ -22,9 +22,9 @@
     </dict>
 
     <key>StandardOutPath</key>
-    <string>/var/log/quadcastrgb.log</string>
+    <string>/tmp/quadcastrgb.log</string>
 
     <key>StandardErrorPath</key>
-    <string>/var/log/quadcastrgb.error.log</string>
+    <string>/tmp/quadcastrgb.error.log</string>
 </dict>
 </plist>
